@@ -8,7 +8,7 @@ uint8_t globalSequenceNumber = 0;
 int main(){
 	int i = 0;
 	printf("Hello world!\n");
-	uint8_t netPacket[60];
+	uint8_t netPacket[30];
 
 	for(int i=0; i<sizeof(netPacket);i++){
 		netPacket[i]=2*i;
@@ -31,6 +31,7 @@ void DLLTX(uint8_t *netPacket, uint8_t length){ //pass in a pointer the packet a
 	}
 
 	numberOfFrames=(length/23)+1; //Calculate number of frames with each frame being maximum size
+	
 
 	/*
 	Take the addresses from the network layer
@@ -41,45 +42,42 @@ void DLLTX(uint8_t *netPacket, uint8_t length){ //pass in a pointer the packet a
 	uint8_t destAddress=*netPacket; //Take DEST address byte
 	netPacket-=3; //Go back to start of packet
 
-	uint8_t netPacketSplit[numberOfFrames]; //Array to be filled with pointers to each piece of net packet data
-	uint8_t frame[numberOfFrames];
+	uint8_t *netPacketSplit[numberOfFrames]; //Array to be filled with pointers to each piece of net packet data
+	uint8_t *frame[numberOfFrames];
 
 	/*
 	This splits the net packet into frames
 	*/
-	for(i=0; i<sizeof(frame); i++){
-		uint8_t tempFrame[23]; //Declares a temporary frame to fill
+	for(i=0; i<numberOfFrames; i++){
+		uint8_t tempFrame[23*numberOfFrames]; //Declares a temporary frame to fill
 		for(j=0; j<23; j++){
-			tempFrame[j] = *netPacket; //Sets the element of the frame to the current value of the net packet
+			tempFrame[j+i*23] = *(netPacket+(j+23*i)); //Sets the element of the frame to the current value of the net packet
 			#ifdef DEBUG
-			printf("Value at the netPacket is %d\n",tempFrame[j] );
+			printf("Value at the netPacket %d is %d\n",i,tempFrame[j+i*23] );
 			#endif
-			netPacket ++; //Increments the Net Packet pointer to move along the array 
+			//netPacket ++; //Increments the Net Packet pointer to move along the array 
 			count++; //Counts each time the array is incremented
 			if(count==length){
 				break; //When the array has been incremented as many times as its length, break from the loop. This should happen for the final frame only
 			}
 		}
-		netPacketSplit[i] = *tempFrame; //Puts a pointer to the start of the net packet data for each frame in an array 
+		uint8_t * pointer;
+		pointer = tempFrame+i*23;
+		netPacketSplit[i] = pointer; //Puts a pointer to the start of the net packet data for each frame in an array 
 	}
 	#ifdef DEBUG
 	count = 0;
 	for(i=0;i<numberOfFrames;i++){
 		for(j=0; j<23; j++){
-			printf("Frame %d part %d = %d\n",i+1,j+1,unsigned(netPacketSplit[i]));
-			netPacketSplit[i]++;
+			printf("Frame %d part %d = %u\n",i+1,j+1,*(netPacketSplit[i]+(uint8_t)j));
+			//netPacketSplit[i]=netPacketSplit[i]+1;
 			count++;
 			if(count==length){
 				break; //When the array has been incremented as many times as its length, break from the loop. This should happen for the final frame only
 			}
 
 		}
-		if(count!=length){
-			netPacketSplit[i]-=23;	
-		}
-		else{
-			netPacketSplit[i]-=(length%23);
-		}
+
 	}
 	#endif
 
@@ -138,7 +136,7 @@ void DLLTX(uint8_t *netPacket, uint8_t length){ //pass in a pointer the packet a
 			checksum1[i]=0; //The second checksum byte is unused
 			checksum0[i] = header[i] ^ srcAddress ^ destAddress ^frameLength[i] ^ footer; //Gets the XOR of bytes not in the net packet
 			for(j=0; j<frameLength[i]-9;j++){
-				checksum0[i] = checksum0[i] ^ netPacketSplit[i]; //Gets the XOR of bytes in the netpacket
+				checksum0[i] = checksum0[i] ^ *(netPacketSplit[i]+j+i*23); //Gets the XOR of bytes in the netpacket
 				netPacketSplit[i]++; //Increments net packet pointer
 			}
 			netPacketSplit[i]-=frameLength[i]-9; //Resets net packet pointer
@@ -154,7 +152,7 @@ void DLLTX(uint8_t *netPacket, uint8_t length){ //pass in a pointer the packet a
 	This combines each section of the frame
 	*/
 	for(i=0; i<numberOfFrames; i++){
-		uint8_t tempFrame[frameLength[i]];
+		uint8_t tempFrame[frameLength[i]*numberOfFrames];
 		tempFrame[0] = header[i];
 		tempFrame[1] = control1[i];
 		tempFrame[2] = control0[i];
@@ -162,21 +160,23 @@ void DLLTX(uint8_t *netPacket, uint8_t length){ //pass in a pointer the packet a
 		tempFrame[4] = srcAddress;
 		tempFrame[5] = frameLength[i];
 		for(j=0; j<frameLength[i]-9;j++){
-			tempFrame[j+5] = unsigned(netPacketSplit[i]);
-			netPacketSplit[i]++;
+			tempFrame[j+5] = *(netPacketSplit[i]+j+i*23);
+			//netPacketSplit[i]++;
 		}
 		tempFrame[frameLength[i]-3]=checksum0[i];
 		tempFrame[frameLength[i]-2]=checksum1[i];
 		tempFrame[frameLength[i]-1]=footer;
-		frame[i] = *tempFrame;
+		uint8_t * pointer;
+		pointer = tempFrame+i*frameLength[i];
+		frame[i] = pointer;
 	}
 	#ifdef DEBUG
 	for(i=0; i<numberOfFrames; i++){
 		for(j=0; j<frameLength[i]; j++){
-			printf("Frame number %d byte number %d = %d\n",i,j,frame[i] );
-			frame[i]++;
+			printf("Frame number %d byte number %d = %u\n",i,j,*(frame[i]+j+frameLength[i]*i));
+			//frame[i]++;
 		}
-		frame[i]-=frameLength[i];
+		//frame[i]-=frameLength[i];
 	}
 	#endif
 
