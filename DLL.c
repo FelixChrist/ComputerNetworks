@@ -3,17 +3,25 @@
 #include <stdio.h>
 #define DEBUG 
 #define VERSION 0
-void DLLTX(uint8_t *netPacket, uint8_t length);
+void DLLTX(uint8_t *netPacket, uint8_t length, uint8_t acknowledge);
+void DLLRX(uint8_t *frame, uint8_t length);
+struct Buffer{
+	uint8_t *frames[];
+	uint8_t seqNum;
+};
+struct Buffer DLLRXBuffer[0];
+struct Buffer DLLTXBuffer[0];
+
 uint8_t globalSequenceNumber = 0;
 int main(){
 	int i = 0;
 	printf("Hello world!\n");
-	uint8_t netPacket[30];
+	uint8_t netPacket[60];
 
 	for(int i=0; i<sizeof(netPacket);i++){
 		netPacket[i]=2*i;
 	}
-	DLLTX(netPacket, sizeof(netPacket));
+	DLLTX(netPacket, sizeof(netPacket), 2);
 	return 0;
 }
 
@@ -23,16 +31,16 @@ To be called by the Network layer to initiate a transmit
 
 */
 
-void DLLTX(uint8_t *netPacket, uint8_t length){ //pass in a pointer the packet and the length of the array
-	uint8_t i = 0, j = 0, count = 0, footer = 0xAA,sequenceNumber=globalSequenceNumber, numberOfFrames;
+void DLLTX(uint8_t *netPacket, uint8_t length, uint8_t acknowledge){ //pass in a pointer the packet and the length of the array
+	uint8_t i = 0, j = 0, count = 0, footer = 0xAA,sequenceNumber=globalSequenceNumber, numberOfFrames, TTL = 15;
 	globalSequenceNumber++;
 	if(globalSequenceNumber == 15){
 		globalSequenceNumber=0;
 	}
 
 	numberOfFrames=(length/23)+1; //Calculate number of frames with each frame being maximum size
-	
-
+	uint8_t header[numberOfFrames], control0[numberOfFrames],control1[numberOfFrames],frameLength[numberOfFrames],checksum0[numberOfFrames],checksum1[numberOfFrames];
+	uint8_t tempFrame2[32*numberOfFrames];
 	/*
 	Take the addresses from the network layer
 	*/
@@ -48,6 +56,7 @@ void DLLTX(uint8_t *netPacket, uint8_t length){ //pass in a pointer the packet a
 	/*
 	This splits the net packet into frames
 	*/
+
 	for(i=0; i<numberOfFrames; i++){
 		uint8_t tempFrame[23*numberOfFrames]; //Declares a temporary frame to fill
 		for(j=0; j<23; j++){
@@ -65,12 +74,13 @@ void DLLTX(uint8_t *netPacket, uint8_t length){ //pass in a pointer the packet a
 		pointer = tempFrame+i*23;
 		netPacketSplit[i] = pointer; //Puts a pointer to the start of the net packet data for each frame in an array 
 	}
+
 	#ifdef DEBUG
 	count = 0;
 	for(i=0;i<numberOfFrames;i++){
 		for(j=0; j<23; j++){
 			printf("Frame %d part %d = %u\n",i+1,j+1,*(netPacketSplit[i]+(uint8_t)j));
-			//netPacketSplit[i]=netPacketSplit[i]+1;
+			
 			count++;
 			if(count==length){
 				break; //When the array has been incremented as many times as its length, break from the loop. This should happen for the final frame only
@@ -84,7 +94,8 @@ void DLLTX(uint8_t *netPacket, uint8_t length){ //pass in a pointer the packet a
 	/* 
 	This sets the header byte for each frame
 	*/
-	uint8_t header[numberOfFrames]; //Declares an array to set the header bytes for each frame
+
+
 	for(int i=0; i<numberOfFrames; i++){
 		header[i]=0;
 		header[i] = (header[i] & 63) | VERSION << 6; //Puts the version number in the 2 most significant bits
@@ -95,13 +106,14 @@ void DLLTX(uint8_t *netPacket, uint8_t length){ //pass in a pointer the packet a
 		#endif
 	}
 
+
 	/*
 	This sets the control bytes for each frame
 	*/
-	uint8_t control0[numberOfFrames],control1[numberOfFrames], TTL = 15;
+
 	for(int i=0; i<numberOfFrames; i++){
 		/* ACKS CURRENTLY NOT IMPLEMENTED*/
-		control1[i]=0; 
+		control1[i]=acknowledge; 
 		control0[i]=0;
 		control0[i]= (control0[i] & 15) | TTL << 4; //Sets the 4 most significant bits to the TTL
 		control0[i]= (control0[i] & 240) | sequenceNumber; //Sets the 4 least significant bits to the sequence number
@@ -113,7 +125,7 @@ void DLLTX(uint8_t *netPacket, uint8_t length){ //pass in a pointer the packet a
 	/*
 	This sets the length for each frame
 	*/
-	uint8_t frameLength[numberOfFrames];
+
 	for(int i=0; i<numberOfFrames; i++){
 		if(i+1!=numberOfFrames){
 			frameLength[i] = 32; //Length for all except last frame is 32
@@ -129,7 +141,7 @@ void DLLTX(uint8_t *netPacket, uint8_t length){ //pass in a pointer the packet a
 	/* 
 	This calculates the checksum of each frame
 	*/
-	uint8_t checksum0[numberOfFrames],checksum1[numberOfFrames];
+
 	switch(VERSION){ //Picks the checksum type based on version
 		case 0:
 		for(i=0; i<numberOfFrames; i++){
@@ -137,9 +149,9 @@ void DLLTX(uint8_t *netPacket, uint8_t length){ //pass in a pointer the packet a
 			checksum0[i] = header[i] ^ srcAddress ^ destAddress ^frameLength[i] ^ footer; //Gets the XOR of bytes not in the net packet
 			for(j=0; j<frameLength[i]-9;j++){
 				checksum0[i] = checksum0[i] ^ *(netPacketSplit[i]+j+i*23); //Gets the XOR of bytes in the netpacket
-				netPacketSplit[i]++; //Increments net packet pointer
+				
 			}
-			netPacketSplit[i]-=frameLength[i]-9; //Resets net packet pointer
+			
 			#ifdef DEBUG
 			printf("First Checksum byte %d = %d\n",i,checksum0[i]);
 			printf("Second Checksum byte %d = %d\n",i, checksum1[i]);
@@ -151,34 +163,45 @@ void DLLTX(uint8_t *netPacket, uint8_t length){ //pass in a pointer the packet a
 	/*
 	This combines each section of the frame
 	*/
+	
+	uint8_t * pointer;
+
 	for(i=0; i<numberOfFrames; i++){
-		uint8_t tempFrame[frameLength[i]*numberOfFrames];
-		tempFrame[0] = header[i];
-		tempFrame[1] = control1[i];
-		tempFrame[2] = control0[i];
-		tempFrame[3] = destAddress;
-		tempFrame[4] = srcAddress;
-		tempFrame[5] = frameLength[i];
+		
+		tempFrame2[0+i*32] = header[i]; //Add header byte
+		tempFrame2[1+i*32] = control1[i]; //Add first control byte
+		tempFrame2[2+i*32] = control0[i]; //Add second control byte
+		tempFrame2[3+i*32] = destAddress; //Add dest address 
+		tempFrame2[4+i*32] = srcAddress; //Add scr Address
+		tempFrame2[5+i*32] = frameLength[i]; //Add length
 		for(j=0; j<frameLength[i]-9;j++){
-			tempFrame[j+5] = *(netPacketSplit[i]+j+i*23);
-			//netPacketSplit[i]++;
+			tempFrame2[j+6+i*32] = *(netPacketSplit[i]+(uint8_t)j); //Add each section of the net packet
 		}
-		tempFrame[frameLength[i]-3]=checksum0[i];
-		tempFrame[frameLength[i]-2]=checksum1[i];
-		tempFrame[frameLength[i]-1]=footer;
-		uint8_t * pointer;
-		pointer = tempFrame+i*frameLength[i];
-		frame[i] = pointer;
+		tempFrame2[frameLength[i]-3+i*32]=checksum0[i]; //Add first checksum byte
+		tempFrame2[frameLength[i]-2+i*32]=checksum1[i];  //Add second checksum byte
+		tempFrame2[frameLength[i]-1+i*32]=footer; //Add footer byte
+		pointer = tempFrame2+i*32;
+		frame[i] = pointer; //Store pointer to frame in array
 	}
 	#ifdef DEBUG
 	for(i=0; i<numberOfFrames; i++){
 		for(j=0; j<frameLength[i]; j++){
-			printf("Frame number %d byte number %d = %u\n",i,j,*(frame[i]+j+frameLength[i]*i));
-			//frame[i]++;
+			printf("Frame number %d byte number %d = %u\n",i,j,*(frame[i]+j));
+			
 		}
-		//frame[i]-=frameLength[i];
+		
 	}
 	#endif
 
 
+}
+
+void DLLRX(uint8_t *frame, uint8_t length){
+	uint8_t i = 0;
+	uint8_t netPacket[*(frame+5)-9];
+	if(*(frame + 1)==0){
+		for(i=0;i<(*(frame+5))-9;i++){
+			netPacket[i]=*(frame+6+i);
+		}
+	}
 }
