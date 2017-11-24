@@ -1,16 +1,21 @@
 #include <inttypes.h>
 //#include <avr/io.h>
 #include <stdio.h>
+#include <stdlib.h>
 #define DEBUG 
 #define VERSION 0
-void DLLTX(uint8_t *netPacket, uint8_t length, uint8_t acknowledge);
-void DLLRX(uint8_t *frame, uint8_t length);
+void DLLTX(uint8_t *netPacket, uint8_t length);
+int DLLRX(uint8_t *frame, uint8_t length);
 struct Buffer{
-	uint8_t *frames[];
+	uint8_t *pointToFrameStart;
 	uint8_t seqNum;
+	uint8_t length;
+	//uint8_t key;
+	struct Buffer *next;
 };
 struct Buffer DLLRXBuffer[0];
 struct Buffer DLLTXBuffer[0];
+uint8_t framesBuffer[0];
 
 uint8_t globalSequenceNumber = 0;
 int main(){
@@ -21,7 +26,9 @@ int main(){
 	for(int i=0; i<sizeof(netPacket);i++){
 		netPacket[i]=2*i;
 	}
-	DLLTX(netPacket, sizeof(netPacket), 2);
+	DLLTX(netPacket, sizeof(netPacket));
+	uint8_t frame[23]= {0, 0, 255, 5, 6, 23, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 0, 0, 0xAA};
+	//DLLRX(frame,sizeof(frame));
 	return 0;
 }
 
@@ -31,7 +38,7 @@ To be called by the Network layer to initiate a transmit
 
 */
 
-void DLLTX(uint8_t *netPacket, uint8_t length, uint8_t acknowledge){ //pass in a pointer the packet and the length of the array
+void DLLTX(uint8_t *netPacket, uint8_t length){ //pass in a pointer the packet and the length of the array
 	uint8_t i = 0, j = 0, count = 0, footer = 0xAA,sequenceNumber=globalSequenceNumber, numberOfFrames, TTL = 15;
 	globalSequenceNumber++;
 	if(globalSequenceNumber == 15){
@@ -113,7 +120,7 @@ void DLLTX(uint8_t *netPacket, uint8_t length, uint8_t acknowledge){ //pass in a
 
 	for(int i=0; i<numberOfFrames; i++){
 		/* ACKS CURRENTLY NOT IMPLEMENTED*/
-		control1[i]=acknowledge; 
+		control1[i]=0; 
 		control0[i]=0;
 		control0[i]= (control0[i] & 15) | TTL << 4; //Sets the 4 most significant bits to the TTL
 		control0[i]= (control0[i] & 240) | sequenceNumber; //Sets the 4 least significant bits to the sequence number
@@ -146,11 +153,14 @@ void DLLTX(uint8_t *netPacket, uint8_t length, uint8_t acknowledge){ //pass in a
 		case 0:
 		for(i=0; i<numberOfFrames; i++){
 			checksum1[i]=0; //The second checksum byte is unused
-			checksum0[i] = header[i] ^ srcAddress ^ destAddress ^frameLength[i] ^ footer; //Gets the XOR of bytes not in the net packet
+			checksum0[i] = header[i] ^ control0[i] ^ control1[i] ^ srcAddress ^ destAddress ; //Gets the XOR of bytes not in the net packet
 			for(j=0; j<frameLength[i]-9;j++){
+	
 				checksum0[i] = checksum0[i] ^ *(netPacketSplit[i]+j+i*23); //Gets the XOR of bytes in the netpacket
+
 				
 			}
+			checksum0[i] = checksum0[i] ^frameLength[i] ^ footer;
 			
 			#ifdef DEBUG
 			printf("First Checksum byte %d = %d\n",i,checksum0[i]);
@@ -192,16 +202,58 @@ void DLLTX(uint8_t *netPacket, uint8_t length, uint8_t acknowledge){ //pass in a
 		
 	}
 	#endif
+	//DLLTXBuffer = (int*) malloc(1);
+	DLLRX(frame[0],23);
 
 
 }
 
-void DLLRX(uint8_t *frame, uint8_t length){
+int DLLRX(uint8_t *frame, uint8_t length){
 	uint8_t i = 0;
-	uint8_t netPacket[*(frame+5)-9];
-	if(*(frame + 1)==0){
-		for(i=0;i<(*(frame+5))-9;i++){
-			netPacket[i]=*(frame+6+i);
-		}
+	uint8_t netPacket[*(frame+5)-9]; //Create array the size of the netpacket segment
+	uint8_t checksum = 0;
+
+	/*
+		Check checksum is correct
+	*/
+
+	switch((*frame & 192) >> 6){ //Check version number
+		case 0:		//If version zero
+			for(i=0; i<*(frame+5); i++){
+				if((i != *(frame+5)-3 ) && (i!=*(frame+5)-2)){	//Exclude address of checksum bytes	
+					checksum = checksum^*(frame+i); //XOR bytes
+				}
+			}
+			if(checksum == *(frame+*(frame+5)-3)){ //Check checksum is correct
+				break;
+			} 
+			else{
+				#ifdef DEBUG
+					printf("%s\n", "Failed Checksum");
+				#endif
+				return 0;
+			}
+		default:
+			return 0;
 	}
+	/*
+		Get the netpacket segment
+	*/
+
+	if(*(frame + 1)==0){ //If it's not an ack
+		for(i=0;i<(*(frame+5))-9;i++){
+			netPacket[i]=*(frame+6+i); //Put netpacket segment into array
+		}
+		#ifdef DEBUG
+		for(i=0; i<(*(frame+5))-9; i++){
+			printf("%u\n", netPacket[i]);
+		}
+		#endif 
+	}
+}
+void insertTXBuffer(uint8_t *frame, uint8_t length, uint8_t seq){
+	struct Buffer * link = (struct Buffer*) malloc(sizeof(struct Buffer));
+	link->seqNum = seq;
+	link->length = length;
+	
 }
