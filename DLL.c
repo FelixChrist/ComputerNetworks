@@ -1,23 +1,14 @@
 #include <inttypes.h>
-//#include <avr/io.h>
+#include <avr/io.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <util/delay.h>
+#include <avr/interrupt.h>
+#include "rfm12.h"
+#include "DLL.h"
 #define DEBUG 
 #define VERSION 0
-void DLLTX(uint8_t *netPacket, uint8_t length);
-int DLLRX(uint8_t *frame, uint8_t length);
-struct Buffer{
-	uint8_t *pointToFrameStart;
-	uint8_t seqNum;
-	uint8_t length;
-	//uint8_t key;
-	struct Buffer *next;
-};
-struct Buffer DLLRXBuffer[0];
-struct Buffer DLLTXBuffer[0];
-uint8_t framesBuffer[0];
-
-uint8_t globalSequenceNumber = 0;
+#ifdef DEBUG
 int main(){
 	int i = 0;
 	printf("Hello world!\n");
@@ -31,7 +22,7 @@ int main(){
 	//DLLRX(frame,sizeof(frame));
 	return 0;
 }
-
+#endif
 /* 
 
 To be called by the Network layer to initiate a transmit
@@ -202,10 +193,10 @@ void DLLTX(uint8_t *netPacket, uint8_t length){ //pass in a pointer the packet a
 		
 	}
 	#endif
-	//DLLTXBuffer = (int*) malloc(1);
 	DLLRX(frame[0],23);
-
-
+	#ifdef PHYS
+		rfm12_tx(*(frame[0]+5), 0, frame[0]);
+	#endif
 }
 
 int DLLRX(uint8_t *frame, uint8_t length){
@@ -255,5 +246,12 @@ void insertTXBuffer(uint8_t *frame, uint8_t length, uint8_t seq){
 	struct Buffer * link = (struct Buffer*) malloc(sizeof(struct Buffer));
 	link->seqNum = seq;
 	link->length = length;
-	
+
+}
+void DLLTick(){
+	uint8_t *bufptr;
+	if (rfm12_rx_status() == STATUS_COMPLETE){
+		bufptr = rfm12_rx_buffer();
+		DLLRX(bufptr,*(bufptr+5))
+	}
 }
